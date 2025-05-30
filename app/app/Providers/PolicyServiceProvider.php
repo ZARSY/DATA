@@ -11,6 +11,10 @@ use App\Models\Loan;
 use App\Policies\LoanPolicy;
 use App\Models\Payment;
 use App\Policies\PaymentPolicy;
+use Spatie\Permission\Models\Role;
+use App\Policies\RoleSpatiePolicy;
+use Spatie\Permission\Models\Permission;
+use App\Policies\PermissionSpatiePolicy;
 
 use Illuminate\Foundation\Support\Providers\AuthServiceProvider as ServiceProvider; // PENTING: Tetap extend AuthServiceProvider
 // use Illuminate\Support\Facades\Gate; // Uncomment jika Anda menggunakan Gate
@@ -27,6 +31,8 @@ class PolicyServiceProvider extends ServiceProvider // Nama class sesuai yang di
         Saving::class => SavingPolicy::class,
         Loan::class => LoanPolicy::class,
         Payment::class => PaymentPolicy::class,
+        Role::class => RoleSpatiePolicy::class,
+        Permission::class => PermissionSpatiePolicy::class,
     ];
 
     /**
