@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Forms\Get;
 use Filament\Forms\Set;
+use Filament\Forms\Components\FileUpload;
 
 class PaymentResource extends Resource
 {
@@ -28,6 +29,7 @@ class PaymentResource extends Resource
     public static function form(Form $form): Form
     {
         $loggedInUser = auth()->user();
+        $isCreating = $form->getOperation() === 'create';
 
         return $form
             ->schema([
@@ -40,17 +42,17 @@ class PaymentResource extends Resource
                     )
                     ->getOptionLabelFromRecordUsing(function (Loan $record) {
                         $userName = $record->user?->name ?? 'User Tidak Ditemukan';
-                        return "ID: {$record->id} - Peminjam: {$userName} (Rp " . number_format($record->jumlah_pinjaman, 0, ',', '.') . ")";
+                        return "ID: {$record->id} - Peminjam: {$userName} (Rp " . number_format($record->jumlah_pembayaran, 0, ',', '.') . ")";
                     })
                     ->searchable(['id', 'user.name'])
                     ->preload()
                     ->live()
                     ->required()
-                    ->afterStateUpdated(function (Set $set, ?string $state) { // $state adalah loan_id
+                    ->afterStateUpdated(function (Set $set, ?string $state) {
                         if ($state) {
                             $loan = Loan::find($state);
                             if ($loan) {
-                                $set('user_id', $loan->user_id); // Set 'user_id' di form
+                                $set('user_id', $loan->user_id);
                             }
                         } else {
                             $set('user_id', null);
@@ -58,41 +60,35 @@ class PaymentResource extends Resource
                     })
                     ->columnSpanFull(),
 
-                // user_id adalah anggota pemilik pinjaman, diisi otomatis
-                Forms\Components\Hidden::make('user_id')
-                    ->dehydrated(), // PENTING: Pastikan nilai dari field hidden ini disimpan ke database
+                Forms\Components\Hidden::make('user_id')->dehydrated(),
 
-                Forms\Components\TextInput::make('jumlah_pembayaran')
-                    ->label('Jumlah Pembayaran')
-                    ->required()
-                    ->numeric()
-                    ->prefix('Rp')
-                    ->minValue(1),
+                Forms\Components\TextInput::make('jumlah_pembayaran')->label('Jumlah Pembayaran')->required()->numeric()->prefix('Rp')->minValue(1),
+                Forms\Components\DatePicker::make('tanggal_pembayaran')->label('Tanggal Pembayaran')->required()->default(now())->maxDate(now()),
+                Forms\Components\Select::make('metode_pembayaran')->label('Metode Pembayaran')
+                    ->options(['tunai' => 'Tunai', 'transfer_bank' => 'Transfer Bank', 'auto_debet' => 'Auto Debet Simpanan'])->required(),
+                FileUpload::make('bukti_transfer')
+                    ->label('Bukti Transfer Pembayaran (jika transfer)')
+                    ->disk('public')->directory('bukti-angsuran')->image()->imageEditor()->visibility('public')
+                    ->columnSpanFull()
+                    ->requiredIf('metode_pembayaran', 'transfer_bank'), // Wajib jika metode transfer
 
-                Forms\Components\DatePicker::make('tanggal_pembayaran')
-                    ->label('Tanggal Pembayaran')
-                    ->required()
-                    ->default(now())
-                    ->maxDate(now()),
-
-                Forms\Components\Select::make('metode_pembayaran')
-                    ->label('Metode Pembayaran')
+                Forms\Components\Select::make('status') // <-- TAMBAHKAN FIELD STATUS INI
+                    ->label('Status Pembayaran')
                     ->options([
-                        'tunai' => 'Tunai',
-                        'transfer_bank' => 'Transfer Bank',
-                        'auto_debet' => 'Auto Debet Simpanan',
+                        'pending' => 'Pending',
+                        'dikonfirmasi' => 'Dikonfirmasi',
+                        'gagal' => 'Gagal',
                     ])
-                    ->required(),
+                    ->default('dikonfirmasi') // Default saat input
+                    ->required()
+                    // Atur visibilitas atau disable berdasarkan peran jika perlu
+                    // Misalnya, hanya Admin/Teller yang bisa set status selain 'pending' saat create
+                    ->visible(fn (): bool => auth()->user()->hasAnyRole(['Admin', 'Teller'])) // Contoh: hanya Admin/Teller bisa set status
+                    ->disabled($isCreating && !auth()->user()->hasAnyRole(['Admin', 'Teller'])), // Jika Anggota input (jika ada skenario itu), status tidak bisa diubah
 
-                Forms\Components\Textarea::make('keterangan')
-                    ->label('Keterangan (Opsional)')
-                    ->columnSpanFull(),
+                Forms\Components\Textarea::make('keterangan')->label('Keterangan (Opsional)')->columnSpanFull(),
+                Forms\Components\Hidden::make('processed_by')->default($loggedInUser->id),
 
-                Forms\Components\Hidden::make('processed_by')
-                    ->default($loggedInUser->id),
-
-                Forms\Components\Hidden::make('status_pembayaran')
-                    ->default('dikonfirmasi'),
             ]);
     }
 
@@ -100,64 +96,81 @@ class PaymentResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('loan.id')
-                    ->label('ID Pinj.')
-                    ->searchable()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('loan_user_name_accessor') // Menggunakan accessor jika relasi kompleks
+                Tables\Columns\TextColumn::make('loan.id')->label('ID Pinj.')->searchable()->sortable(),
+                Tables\Columns\TextColumn::make('loan_user_name_accessor')
                     ->label('Nama Anggota')
-                    ->getStateUsing(function (Payment $record): ?string { // Cara lebih aman
-                        return $record->loan?->user?->name;
+                    ->getStateUsing(fn (Payment $record): ?string => $record->loan?->user?->name)
+                    ->searchable(query: function (Builder $query, string $search): Builder {
+                        return $query->whereHas('loan.user', fn (Builder $q) => $q->where('name', 'like', "%{$search}%"));
                     })
-                    ->searchable(query: function (Builder $query, string $search): Builder { // Custom search
-                        return $query->whereHas('loan.user', function (Builder $q) use ($search) {
-                            $q->where('name', 'like', "%{$search}%");
-                        });
-                    })
-                    ->sortable(query: function (Builder $query, string $direction): Builder { // Custom sort
+                    ->sortable(query: function (Builder $query, string $direction): Builder {
+                        $userTableName = (new User())->getTable();
+                        $loanTableName = (new Loan())->getTable();
+                        $paymentTableName = (new Payment())->getTable();
                         return $query->orderBy(
-                            // Ini adalah contoh subquery untuk sorting, pastikan nama tabel dan kolom sesuai
-                            Loan::select('users.name')
-                                ->join('users', 'users.id', '=', 'loans.user_id') // Asumsi tabel users dan loans
-                                ->whereColumn('loans.id', 'payments.loan_id'), // Sesuaikan nama tabel jika berbeda
+                            Loan::select("{$userTableName}.name")
+                                ->join($userTableName, "{$userTableName}.id", '=', "{$loanTableName}.user_id")
+                                ->whereColumn("{$loanTableName}.id", "{$paymentTableName}.loan_id"),
                             $direction
                         );
                     }),
-                Tables\Columns\TextColumn::make('jumlah_pembayaran')
-                    ->money('IDR', true)
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('tanggal_pembayaran')
-                    ->date()
-                    ->sortable(),
-                Tables\Columns\TextColumn::make('metode_pembayaran')
+                Tables\Columns\TextColumn::make('jumlah_pembayaran')->money('IDR', true)->sortable(),
+                Tables\Columns\TextColumn::make('tanggal_pembayaran')->date()->sortable(),
+                Tables\Columns\TextColumn::make('status') // <-- TAMBAHKAN KOLOM STATUS INI
                     ->badge()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                Tables\Columns\TextColumn::make('processor.name') // Pastikan relasi 'processor' ada di model Payment
-                    ->label('Diproses Oleh')
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                Tables\Columns\TextColumn::make('created_at')
-                    ->label('Tgl Input')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->color(fn (string $state): string => match ($state) {
+                        'pending' => 'warning',
+                        'dikonfirmasi' => 'success',
+                        'gagal' => 'danger',
+                        default => 'gray',
+                    })
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('metode_pembayaran')->badge()->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('processor.name')->label('Diproses Oleh')->sortable()->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('created_at')->label('Tgl Input')->dateTime()->sortable()->toggleable(isToggledHiddenByDefault: true),
+
+                // ...
+                Tables\Columns\ImageColumn::make('bukti_transfer')->label('Bukti')->disk('public')->toggleable(),
+                Tables\Columns\TextColumn::make('status')->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'pending_approval' => 'warning',
+                        'dikonfirmasi' => 'success',
+                        'gagal' => 'danger',
+                        default => 'gray',
+                    })->sortable(),
+                // ...
             ])
             ->filters([
-                SelectFilter::make('loan_id')
-                    ->label('ID Pinjaman')
-                    ->relationship('loan', 'id') // Menampilkan ID pinjaman di filter
-                    ->getOptionLabelFromRecordUsing(function (Loan $record) { // Kustomisasi label di filter
-                        $userName = $record->user?->name ?? 'User Tidak Ditemukan';
-                        return "ID: {$record->id} - {$userName}";
-                    })
-                    ->searchable()
-                    ->preload()
-                    // Filter ini hanya visible jika user punya izin lihat semua pembayaran
-                    ->visible(fn(): bool => auth()->user()->can('view_any_payments')),
+                SelectFilter::make('status') // <-- TAMBAHKAN FILTER STATUS INI
+                    ->options([
+                        'pending' => 'Pending',
+                        'dikonfirmasi' => 'Dikonfirmasi',
+                        'gagal' => 'Gagal',
+                    ]),
+                SelectFilter::make('loan_id')->label('ID Pinjaman')->relationship('loan', 'id')
+                    ->getOptionLabelFromRecordUsing(fn (Loan $record) => "ID: {$record->id} - {$record->user?->name}")
+                    ->searchable()->preload()->visible(fn(): bool => auth()->user()->can('view_any_payments')),
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
+                // Anda bisa menambahkan Aksi untuk konfirmasi pembayaran di sini jika perlu
+                Tables\Actions\ActionGroup::make([
+                Tables\Actions\Action::make('approve_payment')
+                    ->label('Setujui')->icon('heroicon-o-check-circle')->color('success')->requiresConfirmation()
+                    ->action(fn (Payment $record) => $record->update(['status' => 'dikonfirmasi']))
+                    ->visible(fn (Payment $record): bool => $record->status === 'pending_approval' && auth()->user()->can('confirm_payments')), // Ganti dengan permission yang sesuai
+                Tables\Actions\Action::make('reject_payment')
+                    ->label('Tolak')->icon('heroicon-o-x-circle')->color('danger')->requiresConfirmation()
+                    ->form([Forms\Components\Textarea::make('rejection_reason')->label('Alasan Penolakan')->required()])
+                    ->action(function (Payment $record, array $data) {
+                        $record->keterangan = ($record->keterangan ? $record->keterangan . "\n" : "") . "Ditolak: " . $data['rejection_reason'];
+                        $record->status = 'gagal'; // Atau 'ditolak'
+                        $record->save();
+                    })
+                    ->visible(fn (Payment $record): bool => $record->status === 'pending_approval' && auth()->user()->can('confirm_payments')), // Ganti dengan permission yang sesuai
+            ])->label('Aksi Cepat')->icon('heroicon-m-ellipsis-vertical')->visible(fn (Payment $record): bool => $record->status === 'pending_approval' && auth()->user()->can('confirm_payments')), // Ganti dengan permission yang sesuai
+            // ...
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
@@ -166,36 +179,23 @@ class PaymentResource extends Resource
             ]);
     }
 
-    public static function getRelations(): array
-    {
-        return [
-            // Biasanya tidak ada relation manager di bawah Payment
-        ];
-    }
-
-    public static function getPages(): array
-    {
+    // ... (getRelations, getPages, getEloquentQuery tetap sama)
+    public static function getRelations(): array { return []; }
+    public static function getPages(): array {
         return [
             'index' => Pages\ListPayments::route('/'),
             'create' => Pages\CreatePayment::route('/create'),
             'edit' => Pages\EditPayment::route('/{record}/edit'),
         ];
     }
-
-    public static function getEloquentQuery(): Builder
-    {
+    public static function getEloquentQuery(): Builder {
         $user = auth()->user();
-
         if ($user->hasRole('Anggota') && $user->can('view_own_payments')) {
-            // Filter pembayaran berdasarkan user_id di tabel payments
-            // (user_id di tabel payments adalah ID anggota pemilik pinjaman)
             return parent::getEloquentQuery()->where('user_id', $user->id);
         }
-
-        if (!$user->can('view_any_payments') && !$user->hasRole('Anggota')) {
-           return parent::getEloquentQuery()->whereNull('id'); // Query kosong jika tidak ada izin
-        }
-
+         if (!$user->can('view_any_payments') && !$user->hasRole('Anggota')) {
+            return parent::getEloquentQuery()->whereNull('id');
+       }
         return parent::getEloquentQuery();
     }
 }

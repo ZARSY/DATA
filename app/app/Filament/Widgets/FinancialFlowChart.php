@@ -27,10 +27,9 @@ class FinancialFlowChart extends ChartWidget
     public static function canView(): bool
     {
         $user = auth()->user();
-        return $user->hasAnyRole(['Admin', 'Manajer Keuangan']) &&
-               $user->can('view_any_savings') && // Asumsi mereka boleh lihat semua data ini
-               $user->can('view_any_loans') &&
-               $user->can('view_any_payments');
+        // Hanya yang punya permission 'view_financial_dashboard_widget' yang bisa lihat
+        // Permission ini diberikan ke Admin dan Manajer Keuangan di seeder
+        return $user->can('view_financial_dashboard_widget');
     }
 
     protected function getData(): array
@@ -74,7 +73,7 @@ class FinancialFlowChart extends ChartWidget
         // 2. Kalkulasi Uang Masuk dari Angsuran yang Dikonfirmasi
         $angsuranMasuk = Payment::query()
             ->whereBetween('tanggal_pembayaran', [$startDate, $endDate])
-            ->where('status_pembayaran', 'dikonfirmasi') // Hanya angsuran yang sudah dikonfirmasi
+            ->where('status', 'dikonfirmasi') // Hanya angsuran yang sudah dikonfirmasi
             ->select(
                 DB::raw("SUM(jumlah_pembayaran) as total_jumlah"),
                 DB::raw("DATE_FORMAT(tanggal_pembayaran, '%Y-%m') as bulan_tahun")

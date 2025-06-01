@@ -14,7 +14,8 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Forms\Get;
-use Filament\Forms\Set; // Untuk set value field lain
+use Filament\Forms\Set;
+use Filament\Forms\Components\FileUpload; // Untuk set value field lain
 //use Illuminate\Support\Carbon;
 
 class LoanResource extends Resource
@@ -169,7 +170,8 @@ public static function table(Table $table): Table {
     return $table
         ->columns([
             Tables\Columns\TextColumn::make('id')->label('ID Pinj.')->sortable()->searchable(),
-            Tables\Columns\TextColumn::make('user.name')->label('Peminjam')->searchable()->sortable(),
+            Tables\Columns\TextColumn::make('user.name')->label('Peminjam')->searchable()->sortable()->
+            getStateUsing(fn (Loan $record): ?string => $record->user?->name ?? 'User Dihapus'),
             Tables\Columns\TextColumn::make('jumlah_pinjaman')->money('IDR', true)->sortable(),
             Tables\Columns\TextColumn::make('jangka_waktu_bulan')->label('Waktu (Bln)')->suffix(' bln')->sortable(),
             Tables\Columns\TextColumn::make('bunga_persen_per_bulan')->label('Bunga (%)')->suffix('%')->sortable()->toggleable(isToggledHiddenByDefault: true),
@@ -183,7 +185,13 @@ public static function table(Table $table): Table {
                     'lunas' => 'primary',
                     default => 'gray',
                 }),
-            Tables\Columns\TextColumn::make('approver.name')->label('Disetujui Oleh')->sortable()->toggleable(isToggledHiddenByDefault: true),
+            Tables\Columns\TextColumn::make('approver.name')
+            ->label('Disetujui Oleh')
+             ->getStateUsing(function (Loan $record): ?string { // Cara lebih aman
+                    return $record->approver?->name; // Menggunakan null safe operator '?'
+                })
+            ->sortable()
+            ->toggleable(isToggledHiddenByDefault: true),
             Tables\Columns\TextColumn::make('tanggal_persetujuan')->date()->sortable()->toggleable(isToggledHiddenByDefault: true),
         ])
         ->filters([

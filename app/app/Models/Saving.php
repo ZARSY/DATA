@@ -15,6 +15,7 @@ class Saving extends Model
         'tanggal_transaksi',
         'status',
         'keterangan',
+        'bukti_transfer',
     ];
     public function user(): BelongsTo
     {

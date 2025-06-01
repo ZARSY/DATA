@@ -30,7 +30,7 @@ class UserSeeder extends Seeder
             'email' => 'admin@simpin.test',
             'password' => Hash::make('password'), // Ganti dengan password yang aman
             'email_verified_at' => now(),
-            'nomor_anggota' => 'ADM001',
+            'nomor_anggota' => '1',
             'alamat' => 'Kantor Pusat',
             'telepon' => '0000000000',
         ]);
@@ -41,7 +41,7 @@ class UserSeeder extends Seeder
             'email' => 'zulham@gmail.com',
             'password' => Hash::make('password'), // Ganti dengan password yang aman
             'email_verified_at' => now(),
-            'nomor_anggota' => 'ADM002',
+            'nomor_anggota' => '2',
             'alamat' => 'Kantor Pusat',
             'telepon' => '0000000001',
         ]);
@@ -53,7 +53,7 @@ class UserSeeder extends Seeder
             'email' => 'teller@simpin.test',
             'password' => Hash::make('password'),
             'email_verified_at' => now(),
-            'nomor_anggota' => 'TLR001',
+            'nomor_anggota' => '3',
             'alamat' => 'Meja Layanan',
             'telepon' => '0000000001',
         ]);
@@ -65,7 +65,7 @@ class UserSeeder extends Seeder
             'email' => 'keuangan@simpin.test',
             'password' => Hash::make('password'),
             'email_verified_at' => now(),
-            'nomor_anggota' => 'KEU001',
+            'nomor_anggota' => '4',
             'alamat' => 'Ruang Keuangan',
             'telepon' => '0000000002',
         ]);
@@ -77,7 +77,7 @@ class UserSeeder extends Seeder
             'email' => 'budi@simpin.test',
             'password' => Hash::make('password'),
             'email_verified_at' => now(),
-            'nomor_anggota' => 'AGT001',
+            'nomor_anggota' => '5',
             'alamat' => 'Jl. Anggrek No. 1, Sidoarjo',
             'telepon' => '08123456001',
         ]);
@@ -89,7 +89,7 @@ class UserSeeder extends Seeder
             'email' => 'siti@simpin.test',
             'password' => Hash::make('password'),
             'email_verified_at' => now(),
-            'nomor_anggota' => 'AGT002',
+            'nomor_anggota' => '6',
             'alamat' => 'Jl. Mawar No. 2, Surabaya',
             'telepon' => '08123456002',
         ]);

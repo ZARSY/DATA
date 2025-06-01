@@ -23,12 +23,22 @@ class UserResource extends Resource
     protected static ?string $navigationLabel = 'Data Pengguna';
     protected static ?int $navigationSort = 1;
 
+    // Method untuk mengontrol siapa yang bisa melihat menu ini di sidebar
+    public static function canViewAny(): bool
+    {
+        $user = auth()->user();
+        return $user->can('view_any_users') || $user->can('view_members');
+    }
+
+
     public static function form(Form $form): Form
     {
         $loggedInUser = auth()->user();
         $isCreating = $form->getOperation() === 'create';
         $isEditing = $form->getOperation() === 'edit';
-        $editingSelf = $isEditing && $form->getModelInstance()?->id === $loggedInUser->id;
+        /** @var ?User $editingRecord */
+        $editingRecord = $form->getModelInstance();
+        $editingSelf = $isEditing && $editingRecord && $editingRecord->id === $loggedInUser->id;
 
         return $form
             ->schema([
@@ -46,12 +56,12 @@ class UserResource extends Resource
                             ->password()
                             ->dehydrateStateUsing(fn ($state) => filled($state) ? Hash::make($state) : null)
                             ->required($isCreating)
-                            ->dehydrated(fn ($state) => filled($state)) // Hanya proses jika diisi (penting untuk edit)
+                            ->dehydrated(fn ($state) => filled($state))
                             ->revealable()
                             ->maxLength(255)
                             ->helperText($isEditing ? 'Kosongkan jika tidak ingin mengubah password.' : null)
-                            // Hanya bisa diisi saat create, atau saat edit oleh admin, atau user edit profil sendiri
-                            ->disabled($isEditing && !$loggedInUser->can('update_users', $form->getModelInstance()) && !$editingSelf),
+                            // Bisa diisi saat create. Saat edit, hanya jika punya izin update pada record, atau edit profil sendiri.
+                            ->disabled($isEditing && !$loggedInUser->can('update', $editingRecord) && !$editingSelf),
                     ])->columns(2),
 
                 Forms\Components\Section::make('Informasi Keanggotaan & Kontak')
@@ -63,12 +73,13 @@ class UserResource extends Resource
                                 $roleIds = $get('roles');
                                 if (empty($roleIds) || !is_array($roleIds)) return false;
                                 foreach ($roleIds as $roleId) {
+                                    // Pastikan $roleId adalah integer sebelum digunakan di findById
                                     $role = Role::findById((int)$roleId);
                                     if ($role && $role->name === 'Anggota') return true;
                                 }
                                 return false;
                             })
-                            ->disabled($editingSelf && $loggedInUser->hasRole('Anggota')), // Anggota tidak bisa ubah no_anggota sendiri
+                            ->disabled($editingSelf && $loggedInUser->hasRole('Anggota')),
                         Forms\Components\TextInput::make('telepon')
                             ->tel()
                             ->maxLength(255),
@@ -83,10 +94,12 @@ class UserResource extends Resource
                             ->relationship(name: 'roles', titleAttribute: 'name')
                             ->preload()
                             ->searchable()
-                            // Hanya user dengan permission 'assign_user_roles' yang bisa lihat/edit field ini
-                            ->visible(fn(): bool => $loggedInUser->can('assign_user_roles', User::class))
-                            // Jika user mengedit profilnya sendiri dan bukan Admin (atau tidak punya izin assign), jangan biarkan dia ubah rolenya
-                            ->disabled($editingSelf && !$loggedInUser->can('assign_user_roles', $form->getModelInstance() ?? User::class))
+                            // Gunakan pengecekan permission Spatie secara langsung
+                            ->visible(fn(): bool => $loggedInUser->can('assign_user_roles')) // <-- PERUBAHAN KUNCI
+                            ->disabled(fn(): bool =>
+                                !$loggedInUser->can('assign_user_roles') || // Disable jika tidak punya izin umum
+                                ($editingSelf && !$loggedInUser->hasRole('Super Admin')) // Opsional: Super Admin bisa edit role sendiri
+                            )
                             ->label('Peran Pengguna'),
                         Forms\Components\Toggle::make('email_verified_at')
                             ->label('Email Terverifikasi')
@@ -94,9 +107,11 @@ class UserResource extends Resource
                             ->offIcon('heroicon-s-x-circle')
                             ->formatStateUsing(fn ($state) => (bool)$state)
                             ->dehydrateStateUsing(fn ($state) => $state ? now() : null)
-                            ->visible(fn(): bool => $loggedInUser->can('update_users', $form->getModelInstance() ?? User::class)), // Admin atau yang berhak bisa verifikasi
+                            // Hanya Admin dengan izin 'update_users' yang bisa verifikasi email dari form ini
+                            ->visible(fn(): bool => $loggedInUser->hasRole('Admin') && $loggedInUser->can('update_users')),
                     ])->columns(2)
-                    ->visible($loggedInUser->can('assign_user_roles', User::class) || $loggedInUser->can('update_users', $form->getModelInstance() ?? User::class)), // Section ini hanya muncul jika user punya salah satu hak ini
+                    // Section ini hanya muncul jika user punya izin assign_user_roles ATAU Admin yang bisa update_users
+                    ->visible($loggedInUser->can('assign_user_roles') || ($loggedInUser->hasRole('Admin') && $loggedInUser->can('update_users'))),
             ]);
     }
 
@@ -134,16 +149,13 @@ class UserResource extends Resource
         $user = auth()->user();
         $query = parent::getEloquentQuery();
 
-        // Teller dan Manajer Keuangan hanya bisa melihat/mengelola user dengan role 'Anggota'
-        // kecuali jika mereka punya permission 'view_any_users' (yang biasanya hanya dimiliki Admin)
-        if (($user->hasRole('Teller') || $user->hasRole('Manajer Keuangan')) && !$user->can('view_any_users')) {
+        if (($user->hasRole('Teller') || $user->hasRole('Manajer Keuangan')) && $user->can('view_members') && !$user->can('view_any_users')) {
             return $query->whereHas('roles', function (Builder $roleQuery) {
                 $roleQuery->where('name', 'Anggota');
             });
         }
-        // Anggota tidak melihat daftar user lain sama sekali melalui resource ini
-        if ($user->hasRole('Anggota') && !$user->can('view_any_users')) {
-            return $query->where('id', $user->id); // Hanya dirinya sendiri jika terpaksa (atau query kosong)
+        if ($user->hasRole('Anggota') && !$user->can('view_any_users') && !$user->can('view_members')) {
+            return $query->where('id', -1); // Anggota tidak melihat daftar user lain
         }
         return $query;
     }

@@ -9,89 +9,87 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
-use App\Models\Loan; // Untuk mengambil user_id dari owner loan
+use App\Models\Loan;
+use Filament\Forms\Components\FileUpload;
 
 class PaymentsRelationManager extends RelationManager
 {
     protected static string $relationship = 'payments';
-    protected static ?string $recordTitleAttribute = 'id'; // Atau atribut lain yang relevan dari Payment
+    protected static ?string $recordTitleAttribute = 'id';
 
     public function form(Form $form): Form
     {
         $loggedInUser = auth()->user();
-        /** @var Loan $loanRecord */ // Type hint untuk $this->getOwnerRecord()
+        /** @var Loan $loanRecord */
         $loanRecord = $this->getOwnerRecord();
-        $loanOwnerUserId = $loanRecord ? $loanRecord->user_id : null; // Dapatkan user_id dari pinjaman induk
+        $loanOwnerUserId = $loanRecord ? $loanRecord->user_id : null;
+        $isCreating = $form->getOperation() === 'create';
+
 
         return $form
             ->schema([
-                // user_id (anggota pemilik pinjaman) diisi otomatis dari pinjaman induk
-                Forms\Components\Hidden::make('user_id')
-                    ->default($loanOwnerUserId) // Ambil dari owner record (Loan)
-                    ->dehydrated(), // PENTING
+                Forms\Components\Hidden::make('user_id')->default($loanOwnerUserId)->dehydrated(),
+                Forms\Components\TextInput::make('jumlah_pembayaran')->label('Jumlah Pembayaran')->required()->numeric()->prefix('Rp')->minValue(1),
+                Forms\Components\DatePicker::make('tanggal_pembayaran')->label('Tanggal Pembayaran')->required()->default(now())->maxDate(now()),
+                Forms\Components\Select::make('metode_pembayaran')->label('Metode Pembayaran')
+                    ->options(['tunai' => 'Tunai', 'transfer_bank' => 'Transfer Bank', 'auto_debet' => 'Auto Debet Simpanan'])->required(),
 
-                Forms\Components\TextInput::make('jumlah_pembayaran')
-                    ->label('Jumlah Pembayaran')
-                    ->required()
-                    ->numeric()
-                    ->prefix('Rp')
-                    ->minValue(1),
-
-                Forms\Components\DatePicker::make('tanggal_pembayaran')
-                    ->label('Tanggal Pembayaran')
-                    ->required()
-                    ->default(now())
-                    ->maxDate(now()),
-
-                Forms\Components\Select::make('metode_pembayaran')
-                    ->label('Metode Pembayaran')
+                Forms\Components\Select::make('status') // <-- TAMBAHKAN FIELD STATUS INI
+                    ->label('Status Pembayaran')
                     ->options([
-                        'tunai' => 'Tunai',
-                        'transfer_bank' => 'Transfer Bank',
-                        'auto_debet' => 'Auto Debet Simpanan',
+                        'pending' => 'Pending',
+                        'dikonfirmasi' => 'Dikonfirmasi',
+                        'gagal' => 'Gagal',
                     ])
-                    ->required(),
+                    ->default('dikonfirmasi')
+                    ->required()
+                    ->visible(fn (): bool => auth()->user()->hasAnyRole(['Admin', 'Teller'])) // Contoh
+                    ->disabled($isCreating && !auth()->user()->hasAnyRole(['Admin', 'Teller'])),
 
-                Forms\Components\Textarea::make('keterangan')
-                    ->label('Keterangan (Opsional)')
-                    ->columnSpanFull(),
 
-                Forms\Components\Hidden::make('processed_by')
-                    ->default($loggedInUser->id),
-
-                Forms\Components\Hidden::make('status_pembayaran')
-                    ->default('dikonfirmasi'),
+                Forms\Components\Textarea::make('keterangan')->label('Keterangan (Opsional)')->columnSpanFull(),
+                Forms\Components\Hidden::make('processed_by')->default($loggedInUser->id),
+    
             ]);
     }
 
     public function table(Table $table): Table
     {
         return $table
-            // Kita tidak perlu menampilkan nama anggota atau ID Pinjaman di sini karena sudah dalam konteks satu pinjaman
             ->columns([
                 Tables\Columns\TextColumn::make('jumlah_pembayaran')->money('IDR', true)->sortable(),
                 Tables\Columns\TextColumn::make('tanggal_pembayaran')->date()->sortable(),
+                Tables\Columns\TextColumn::make('status') // <-- TAMBAHKAN KOLOM STATUS INI
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'pending' => 'warning',
+                        'dikonfirmasi' => 'success',
+                        'gagal' => 'danger',
+                        default => 'gray',
+                    })
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('metode_pembayaran')->badge(),
-                Tables\Columns\TextColumn::make('processor.name')->label('Diproses Oleh')->sortable(), // Asumsi ada relasi 'processor' di model Payment
+                Tables\Columns\TextColumn::make('processor.name')->label('Diproses Oleh')->sortable(),
                 Tables\Columns\TextColumn::make('created_at')->label('Tgl Input')->dateTime()->sortable()->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                // Filter biasanya tidak terlalu dibutuhkan di relation manager
+                SelectFilter::make('status') // <-- TAMBAHKAN FILTER STATUS INI
+                    ->options([
+                        'pending' => 'Pending',
+                        'dikonfirmasi' => 'Dikonfirmasi',
+                        'gagal' => 'Gagal',
+                    ]),
             ])
             ->headerActions([
-                Tables\Actions\CreateAction::make()
-                    ->visible(fn (): bool => auth()->user()->can('create_payments')), // Hanya yang punya izin bisa buat angsuran
+                Tables\Actions\CreateAction::make()->visible(fn (): bool => auth()->user()->can('create_payments')),
             ])
             ->actions([
-                Tables\Actions\EditAction::make()
-                     ->visible(fn ($record): bool => auth()->user()->can('update', $record)), // Menggunakan PaymentPolicy
-                Tables\Actions\DeleteAction::make()
-                     ->visible(fn ($record): bool => auth()->user()->can('delete', $record)), // Menggunakan PaymentPolicy
+                Tables\Actions\EditAction::make()->visible(fn ($record): bool => auth()->user()->can('update', $record)),
+                Tables\Actions\DeleteAction::make()->visible(fn ($record): bool => auth()->user()->can('delete', $record)),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make()
-                        ->visible(fn (): bool => auth()->user()->can('delete_payments')), // Sesuaikan permission untuk bulk delete
+                    Tables\Actions\DeleteBulkAction::make()->visible(fn (): bool => auth()->user()->can('delete_payments')),
                 ]),
             ]);
     }
