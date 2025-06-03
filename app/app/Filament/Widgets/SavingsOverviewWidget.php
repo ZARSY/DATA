@@ -14,10 +14,8 @@ class SavingsOverviewWidget extends BaseWidget
     // Kontrol siapa yang bisa melihat widget ini
     public static function canView(): bool
     {
-        $user = auth()->user();
-        // Admin, Manajer Keuangan, dan Teller bisa melihat ringkasan simpanan
-        return $user->hasAnyRole(['Admin', 'Manajer Keuangan', 'Teller']) &&
-               $user->can('view_any_savings');
+       $user = auth()->user();
+        return $user->can('view_financial_reports');
     }
 
     protected function getStats(): array

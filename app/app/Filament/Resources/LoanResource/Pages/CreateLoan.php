@@ -5,8 +5,12 @@ namespace App\Filament\Resources\LoanResource\Pages;
 use App\Filament\Resources\LoanResource;
 use Filament\Actions;
 use Filament\Resources\Pages\CreateRecord;
-use Illuminate\Support\Facades\Auth; // <-- PASTIKAN IMPORT INI ADA
-// use App\Models\Loan; // Tidak wajib untuk file ini, tapi bisa untuk type hinting
+use Illuminate\Support\Facades\Auth;
+use App\Models\Loan; // Untuk type hinting record
+use App\Models\User; // Untuk type hinting applicant
+use App\Notifications\LoanApprovalNeeded;
+use App\Helpers\NotificationRecipients; // <-- PERBAIKAN DI SINI
+use Illuminate\Support\Facades\Notification as NotificationFacade;
 
 class CreateLoan extends CreateRecord
 {
@@ -15,39 +19,44 @@ class CreateLoan extends CreateRecord
     protected function mutateFormDataBeforeCreate(array $data): array
     {
         $loggedInUser = Auth::user();
-
-        // Jika yang membuat adalah Anggota, pastikan user_id adalah ID-nya
         if ($loggedInUser && $loggedInUser->hasRole('Anggota')) {
             $data['user_id'] = $loggedInUser->id;
         }
-        // Jika Admin atau Teller yang membuat, 'user_id' harus sudah dipilih dari form.
-        // Validasi ->required() di LoanResource::form() akan menangani jika Admin/Teller lupa memilih.
-
-        // Selalu set status 'diajukan' saat membuat record baru dari form ini.
         $data['status'] = 'diajukan';
-
-        // Pastikan field persetujuan dan bunga di-set ke NULL atau nilai default yang aman
-        // karena ini baru tahap pengajuan oleh Anggota, atau input awal oleh Admin/Teller.
         $data['tanggal_persetujuan'] = null;
-        $data['bunga_persen_per_bulan'] = $data['bunga_persen_per_bulan'] ?? 0.00; // Default 0 untuk bunga saat pengajuan
+        $data['bunga_persen_per_bulan'] = $data['bunga_persen_per_bulan'] ?? 0.00;
         $data['approved_by'] = null;
         $data['keterangan_approval'] = null;
-
-        // Pastikan tanggal_pengajuan selalu ada
         $data['tanggal_pengajuan'] = $data['tanggal_pengajuan'] ?? now()->format('Y-m-d');
-
         return $data;
     }
 
-    // Opsional: Redirect setelah create
+    protected function afterCreate(): void
+    {
+        /** @var \App\Models\Loan $loan */
+        $loan = $this->record;
+        /** @var \App\Models\User $applicant */
+        $applicant = $loan->user;
+    
+        // Kirim notifikasi HANYA jika statusnya memang 'diajukan'
+        if ($loan->status === 'diajukan' && $applicant) {
+            $approvers = NotificationRecipients::getLoanApprovers(); // Panggil helper yang benar
+            if ($approvers->isNotEmpty()) {
+                NotificationFacade::send($approvers, new LoanApprovalNeeded($loan, $applicant));
+            } else {
+                // Opsional: Log jika tidak ada approver yang ditemukan
+                Log::warning('Tidak ada approver yang ditemukan untuk notifikasi persetujuan pinjaman ID: ' . $loan->id);
+            }
+        }
+    }
+
     protected function getRedirectUrl(): string
     {
         return $this->getResource()::getUrl('index');
     }
 
-    // Opsional: Notifikasi setelah create
     protected function getCreatedNotificationTitle(): ?string
-     {
-        return 'Pengajuan Pinjaman berhasil dibuat';
+    {
+       return 'Pengajuan Pinjaman berhasil dibuat dan menunggu persetujuan.';
     }
 }

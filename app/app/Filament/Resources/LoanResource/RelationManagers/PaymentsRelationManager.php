@@ -11,6 +11,12 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use App\Models\Loan;
 use Filament\Forms\Components\FileUpload;
+use Filament\Tables\Filters\SelectFilter;
+use App\Notifications\PaymentApprovalNeeded; // Tambahkan ini
+use App\Helpers\NotificationRecipients;    // Tambahkan ini
+use Illuminate\Support\Facades\Notification as NotificationFacade; // Tambahkan ini
+use App\Models\Payment;                    // Tambahkan ini
+use Filament\Forms\Get; // Untuk Get di form jika perlu
 
 class PaymentsRelationManager extends RelationManager
 {
@@ -81,7 +87,39 @@ class PaymentsRelationManager extends RelationManager
                     ]),
             ])
             ->headerActions([
-                Tables\Actions\CreateAction::make()->visible(fn (): bool => auth()->user()->can('create_payments')),
+                Tables\Actions\CreateAction::make()
+                    ->mutateFormDataUsing(function (array $data): array { // Untuk memastikan data sebelum create
+                        $loggedInUser = auth()->user();
+                        /** @var \App\Models\Loan $loanRecord */
+                        $loanRecord = $this->getOwnerRecord();
+                        $data['user_id'] = $loanRecord?->user_id; // Ambil user_id dari pinjaman induk
+                        $data['processed_by'] = $loggedInUser->id;
+
+                        // Logika status pembayaran
+                        if (empty($data['status'])) {
+                            if (isset($data['metode_pembayaran']) && $data['metode_pembayaran'] === 'transfer_bank') {
+                                 $data['status'] = 'pending_approval';
+                            } else {
+                                 $data['status'] = ($loggedInUser && $loggedInUser->can('confirm_payments')) ? 'dikonfirmasi' : 'pending_approval';
+                            }
+                        } else {
+                             if ($data['status'] === 'dikonfirmasi' && $loggedInUser && $loggedInUser->hasRole('Teller') && !$loggedInUser->can('confirm_payments')) {
+                                $data['status'] = 'pending_approval';
+                            }
+                        }
+                        return $data;
+                    })
+                    ->after(function (Payment $record) { // Hook setelah record dibuat
+                        /** @var \App\Models\User $member */
+                        $member = $record->member;
+                        if ($record->status === 'pending_approval' && $member) {
+                            $confirmers = NotificationRecipients::getPaymentConfirmers();
+                            if ($confirmers->isNotEmpty()) {
+                                NotificationFacade::send($confirmers, new PaymentApprovalNeeded($record, $member));
+                            }
+                        }
+                    })
+                    ->visible(fn (): bool => auth()->user()->can('create_payments')),
             ])
             ->actions([
                 Tables\Actions\EditAction::make()->visible(fn ($record): bool => auth()->user()->can('update', $record)),

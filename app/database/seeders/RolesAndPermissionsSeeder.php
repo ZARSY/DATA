@@ -18,6 +18,9 @@ class RolesAndPermissionsSeeder extends Seeder
         Permission::findOrCreate('view_filament_admin_panel', 'web');
         Permission::findOrCreate('view_financial_dashboard_widget', 'web');
 
+        // Permissions untuk akses ke halaman Dashboard
+        Permission::findOrCreate('view_financial_reports', 'web');
+
         // User Management
         Permission::findOrCreate('view_any_users', 'web');
         Permission::findOrCreate('view_users', 'web');
@@ -89,7 +92,7 @@ class RolesAndPermissionsSeeder extends Seeder
             'approve_loans', 'view_any_loans', 'view_loans', 'update_loans', // Bisa update loan untuk status berjalan, dll.
             'view_any_savings', 'view_savings',
             'view_any_payments', 'view_payments',
-            'view_any_users', 'view_users', // Bisa lihat daftar user/anggota
+            'view_any_users', 'view_users', 'view_financial_reports', // Bisa lihat daftar user/anggota
 
             // Akses untuk melihat Roles dan Permissions
             'view_any_roles',
@@ -117,7 +120,7 @@ class RolesAndPermissionsSeeder extends Seeder
             'update_users',         // Teller bisa update data Anggota
             'create_savings', 'confirm_savings', 'view_any_savings', 'view_savings', 'update_savings',
             'create_payments', 'view_any_payments', 'view_payments', 'update_payments',
-            'view_any_loans', 'view_loans', // Untuk referensi saat input angsuran
+            'view_any_loans', 'view_loans', 'approve_loans', // Untuk referensi saat input angsuran
         ];
         $roleTeller->syncPermissions($tellerPermissions);
 
